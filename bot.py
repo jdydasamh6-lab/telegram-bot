@@ -1,34 +1,65 @@
+import os
+import yt_dlp
+import asyncio
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-import os
 
-# جلب التوكن من متغيرات البيئة في Railway
 TOKEN = os.getenv("BOT_TOKEN")
 
-# دالة الرد على أمر /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("أهلاً بك! أنا أعمل الآن. أرسل لي أي رسالة أو رابط.")
+    await update.message.reply_text(
+        "مرحباً بك في بوت التحميل الشامل! 📥\n\n"
+        "أرسل لي أي رابط من:\n"
+        "✅ تيك توك (TikTok)\n"
+        "✅ فيسبوك (Facebook)\n"
+        "✅ تويتر (X/Twitter)\n"
+        "✅ انستجرام (Instagram)\n"
+        "✅ يوتيوب (YouTube)"
+    )
 
-# دالة التعامل مع الرسائل والروابط
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    
-    if "http" in text:
-        # هنا يمكنك وضع الأوامر التي تريد تنفيذها عند استلام رابط
-        await update.message.reply_text(f"وصلني الرابط التالي: {text}")
-    else:
-        await update.message.reply_text(f"لقد كتبت: {text}")
+    url = update.message.text
+    if "http" not in url:
+        return
+
+    status_msg = await update.message.reply_text("⏳ جاري جلب الفيديو... قد يستغرق الأمر ثواني")
+
+    # إعدادات التحميل (تدعم معظم المواقع)
+    ydl_opts = {
+        'format': 'best',
+        'outtmpl': 'downloaded_video.%(ext)s', # يحفظ الفيديو بامتداده الأصلي
+        'quiet': True,
+        'no_warnings': True,
+    }
+
+    try:
+        # البدء في عملية التحميل
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+
+        # إرسال الفيديو للمستخدم
+        with open(filename, 'rb') as video_file:
+            await update.message.reply_video(
+                video=video_file, 
+                caption=f"تم التحميل بنجاح من: {info.get('extractor_key', 'الموقع')}"
+            )
+
+        # تنظيف السيرفر (حذف الملف بعد الإرسال)
+        if os.path.exists(filename):
+            os.remove(filename)
+        await status_msg.delete()
+
+    except Exception as e:
+        await status_msg.edit_text(f"❌ عذراً، لم أتمكن من تحميل هذا الفيديو.\nالسبب: {str(e)}")
+        # التأكد من حذف أي ملفات عالقة في حال الخطأ
+        for file in os.listdir():
+            if file.startswith("downloaded_video"):
+                os.remove(file)
 
 if __name__ == "__main__":
-    # بناء التطبيق باستخدام التوكن
     app = ApplicationBuilder().token(TOKEN).build()
-
-    # إضافة "المعالج" الخاص بأمر البداية
     app.add_handler(CommandHandler("start", start))
-
-    # إضافة "المعالج" الخاص بكل الرسائل النصية
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-
-    # تشغيل البوت
-    print("البوت بدأ العمل بنجاح...")
+    print("البوت الشامل يعمل الآن...")
     app.run_polling()
