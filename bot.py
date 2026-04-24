@@ -1,56 +1,33 @@
-from flask import Flask, request
-import telegram
-from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters
-from yt_dlp import YoutubeDL
 import os
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-bot = telegram.Bot(token=TOKEN)
-app = Flask(__name__)
+# أخذ التوكن من Variables في Railway
+TOKEN = os.getenv("BOT_TOKEN")
 
-ydl_opts = {
-    'outtmpl': 'video.%(ext)s',
-    'format': 'best[height<=360]/best',
-    'quiet': True,
-}
+# أمر /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("✅ البوت شغال بنجاح!")
 
-def start(update, context):
-    update.message.reply_text("أرسل رابط فيديو من تويتر (X) وسأحمله لك بجودة 360p ✅")
+# أمر /help
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📌 أرسل أي رسالة وسأقوم بالرد عليك")
 
-def download_video(url):
-    try:
-        with YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-            return 'video.mp4'
-    except:
-        return None
+# الرد على أي رسالة
+async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    await update.message.reply_text(f"📩 أنت قلت: {text}")
 
-def handle_url(update, context):
-    url = update.message.text.strip()
-    if "twitter.com" not in url and "x.com" not in url:
-        update.message.reply_text("❌ أرسل رابط تويتر فقط")
-        return
-    update.message.reply_text("⏳ جاري التحميل بجودة 360p...")
-    filename = download_video(url)
-    if filename and os.path.exists(filename):
-        with open(filename, 'rb') as f:
-            update.message.reply_video(video=f, caption="✅ تم التحميل")
-        os.remove(filename)
-    else:
-        update.message.reply_text("❌ فشل التحميل")
+# تشغيل البوت
+def main():
+    app = ApplicationBuilder().token(TOKEN).build()
 
-dispatcher = Dispatcher(bot, None, use_context=True)
-dispatcher.add_handler(CommandHandler("start", start))
-dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_url))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    update = telegram.Update.de_json(request.get_json(force=True), bot)
-    dispatcher.process_update(update)
-    return 'ok'
+    print("Bot is running...")
+    app.run_polling()
 
-@app.route('/')
-def home():
-    return "Bot is running!"
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
+if __name__ == "__main__":
+    main()
