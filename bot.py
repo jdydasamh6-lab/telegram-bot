@@ -4,7 +4,6 @@ from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters
 from yt_dlp import YoutubeDL
 import os
 
-TOKEN = "8098760550:AAGHlX9cvuHrpl-o4quWchDTz8A-RFwcb4k"
 bot = telegram.Bot(token=TOKEN)
 app = Flask(__name__)
 
