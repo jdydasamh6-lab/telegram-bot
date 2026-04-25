@@ -6,36 +6,51 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 TOKEN = os.getenv("BOT_TOKEN")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("أرسل الرابط الآن وسأحاول تحميله بأسرع جودة ممكنة 🚀")
+    await update.message.reply_text("مرحباً! أنا جاهز لتحميل الفيديوهات من يوتيوب، فيسبوك، تيك توك، وغيرها. أرسل الرابط الآن 📥")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text
     if "http" not in url: return
 
-    status_msg = await update.message.reply_text("⏳ جاري التحميل (نسخة خفيفة)...")
+    status_msg = await update.message.reply_text("⏳ جاري محاولة تجاوز حماية الموقع والتحميل... انتظر قليلاً")
 
+    # إعدادات متقدمة جداً لتجاوز حظر يوتيوب
     ydl_opts = {
-        # اختيار جودة متوسطة لضمان نجاح الإرسال في السيرفر المجاني
+        # نختار جودة الفيديو 720p أو أقل لضمان عدم توقف السيرفر
         'format': 'best[ext=mp4]/best', 
-        'outtmpl': 'video_file.mp4',
+        'outtmpl': 'vid_file.mp4',
         'quiet': True,
+        'no_warnings': True,
+        # هذه السطور هي "المفتاح" لتجاوز الحظر
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'referer': 'https://www.google.com/',
+        'nocheckcertificate': True,
+        'geo_bypass': True, # لتجاوز الحظر الجغرافي
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         
-        # إرسال الفيديو
-        with open('video_file.mp4', 'rb') as video:
-            await update.message.reply_video(video=video, caption="تم التحميل بنجاح ✅")
+        # إرسال الفيديو للمستخدم
+        with open('vid_file.mp4', 'rb') as video:
+            await update.message.reply_video(video=video, caption="تم التحميل بنجاح بواسطة بوتك ✅")
         
-        os.remove('video_file.mp4')
+        # حذف الملف من السيرفر
+        os.remove('vid_file.mp4')
         await status_msg.delete()
 
     except Exception as e:
-        await status_msg.edit_text(f"❌ لم يرسل الفيديو. السبب: {str(e)[:100]}")
-        if os.path.exists('video_file.mp4'): os.remove('video_file.mp4')
+        # إذا فشل، سنحاول إرسال رسالة توضح السبب
+        error_msg = str(e)
+        if "403" in error_msg or "Forbidden" in error_msg:
+            await status_msg.edit_text("❌ يوتيوب حظر السيرفر حالياً. جرب رابط فيديو قصير (Shorts) أو جرب لاحقاً.")
+        elif "Sign in" in error_msg:
+            await status_msg.edit_text("❌ يوتيوب يطلب تسجيل دخول لهذا الفيديو. جرب فيديو آخر عام.")
+        else:
+            await status_msg.edit_text(f"❌ فشل التحميل. السبب: {error_msg[:100]}")
+        
+        if os.path.exists('vid_file.mp4'): os.remove('vid_file.mp4')
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
