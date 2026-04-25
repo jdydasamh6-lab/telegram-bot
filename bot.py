@@ -5,70 +5,62 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 
 TOKEN = os.getenv("BOT_TOKEN")
 
-# إعدادات متقدمة جداً للمراوغة
-YDL_COMMON_OPTS = {
+# إعدادات متقدمة جداً لتجاوز حظر فيسبوك ويوتيوب
+YDL_OPTS_BASE = {
     'quiet': True,
     'no_warnings': True,
     'nocheckcertificate': True,
     'geo_bypass': True,
-    'source_address': '0.0.0.0', # يساعد أحياناً في السيرفرات
-    # استخدام برنامج استخراج "تطبيق الأندرويد" (أصعب في الحظر)
-    'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
-    'user_agent': 'com.google.android.youtube/19.14.33 (Linux; U; Android 11; en_US; Pixel 5)',
+    # التمويه كمتصفح أندرويد لفيسبوك
+    'user_agent': 'Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36',
+    'referer': 'https://www.facebook.com/',
 }
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text
-    status_msg = await update.message.reply_text(f"🔍 جاري البحث (بوضعية التمويه) عن: {query}...")
+    status_msg = await update.message.reply_text("🔍 جاري الفحص والتحضير...")
 
     try:
-        with yt_dlp.YoutubeDL(YDL_COMMON_OPTS) as ydl:
-            # البحث عن 5 نتائج
-            info = ydl.extract_info(f"ytsearch5:{query}", download=False)
-            if not info or 'entries' not in info:
-                await status_msg.edit_text("❌ لم يتم العثور على نتائج.")
-                return
-
-            keyboard = []
-            for entry in info['entries']:
-                button_text = f"🎬 {entry.get('title', 'فيديو')[:40]}..."
-                keyboard.append([InlineKeyboardButton(button_text, callback_data=entry['id'])])
-
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await status_msg.edit_text(f"💡 نتائج البحث عن ({query}):", reply_markup=reply_markup)
-
+        with yt_dlp.YoutubeDL(YDL_OPTS_BASE) as ydl:
+            # إذا كان رابط مباشر (فيسبوك مثلاً)
+            if "http" in query:
+                info = ydl.extract_info(query, download=False)
+                title = info.get('title', 'فيديو')
+                await status_msg.edit_text(f"📥 جاري تحميل فيديو من فيسبوك:\n{title}")
+                await download_and_send(update, query, status_msg)
+            else:
+                # إذا كان بحث يوتيوب
+                info = ydl.extract_info(f"ytsearch5:{query}", download=False)
+                keyboard = [[InlineKeyboardButton(f"🎬 {e['title'][:35]}...", callback_data=e['id'])] for e in info['entries']]
+                await status_msg.edit_text(f"💡 نتائج البحث عن ({query}):", reply_markup=InlineKeyboardMarkup(keyboard))
     except Exception as e:
-        await status_msg.edit_text(f"❌ خطأ في البحث: {str(e)[:100]}")
+        await status_msg.edit_text(f"❌ الموقع رفض الاتصال بالسيرفر حالياً.\nالسبب: {str(e)[:50]}")
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    video_id = query.data
-    video_url = f"https://www.youtube.com/watch?v={video_id}"
-    
-    msg = await query.message.reply_text("⏳ جاري سحب الفيديو... يرجى الصبر")
-    
-    output = f"vid_{video_id}.mp4"
-    ydl_opts = {
-        **YDL_COMMON_OPTS,
-        'format': 'best[ext=mp4]/best',
-        'outtmpl': output,
-    }
+    video_url = f"https://www.youtube.com/watch?v={query.data}"
+    await download_and_send(query, video_url)
 
+async def download_and_send(update_obj, url, status_msg=None):
+    output = f"file_{os.urandom(2).hex()}.mp4"
+    opts = {**YDL_OPTS_BASE, 'format': 'best[ext=mp4]/best', 'outtmpl': output}
+    
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([video_url])
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([url])
         
-        await query.message.reply_video(video=open(output, 'rb'), caption="✅ تم التحميل بنجاح!")
+        chat_id = update_obj.message.chat_id
+        await update_obj.get_bot().send_video(chat_id=chat_id, video=open(output, 'rb'))
         os.remove(output)
-        await msg.delete()
+        if status_msg: await status_msg.delete()
     except Exception as e:
-        await query.message.reply_text("❌ عذراً، يوتيوب شدد الحظر على هذا السيرفر.\nجرب رابط تيك توك أو فيسبوك، فهما يعملان بدون مشاكل.")
-        if os.path.exists(output): os.remove(output)
+        chat_id = update_obj.message.chat_id
+        await update_obj.get_bot().send_message(chat_id=chat_id, text="❌ السيرفر محظور من هذا الموقع حالياً.")
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("أرسل اسم الفيديو!")))
+    app.add_handler(CommandHandler("start", lambda u,c: u.message.reply_text("أرسل رابطاً أو اسم فيديو!")))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.run_polling()
