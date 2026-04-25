@@ -1,50 +1,70 @@
 import os
 import yt_dlp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
 TOKEN = os.getenv("BOT_TOKEN")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("مرحباً بك! اكتب اسم أي فيديو أو أرسل رابطاً وسأقوم بتحميله لك فوراً 🎬")
-
+# دالة البحث وجلب 5 نتائج
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text
-    status_msg = await update.message.reply_text("🔍 جاري البحث والتحميل... يرجى الانتظار")
+    if query.startswith('http'):
+        await update.message.reply_text("⏳ جاري تحميل الرابط المباشر...")
+        await download_video(update, query)
+        return
 
-    # إعدادات قوية للبحث والتحميل بجودة متوسطة لضمان الإرسال
-    ydl_opts = {
-        'format': 'best[ext=mp4]/best', 
-        'outtmpl': 'video_result.mp4',
-        'quiet': True,
-        'default_search': 'ytsearch1',
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    }
+    status_msg = await update.message.reply_text(f"🔍 جاري البحث عن: {query}...")
 
+    ydl_opts = {'quiet': True, 'no_warnings': True, 'default_search': 'ytsearch5'}
+    
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(query if "http" in query else f"ytsearch1:{query}", download=True)
-            # إذا كان بحثاً، نأخذ معلومات الفيديو الأول
-            video_info = info['entries'][0] if 'entries' in info else info
-            title = video_info.get('title', 'فيديو')
+            info = ydl.extract_info(f"ytsearch5:{query}", download=False)
+            results = info['entries']
 
-        # إرسال الفيديو
-        if os.path.exists('video_result.mp4'):
-            await update.message.reply_video(
-                video=open('video_result.mp4', 'rb'),
-                caption=f"✅ تم تحميل: {title}"
-            )
-            os.remove('video_result.mp4')
-            await status_msg.delete()
-        else:
-            await status_msg.edit_text("❌ عذراً، لم أتمكن من العثور على ملف الفيديو.")
+        keyboard = []
+        for entry in results:
+            # نضع اسم الفيديو في الزر، والـ callback_data هو رابط الفيديو
+            button_text = f"🎬 {entry['title'][:40]}..."
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=entry['url'])])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await status_msg.edit_text(f"💡 نتائج البحث عن ({query}):\nإختر الفيديو المطلوب لتحميله 👇", reply_markup=reply_markup)
 
     except Exception as e:
-        await status_msg.edit_text(f"❌ حدث خطأ: {str(e)[:100]}")
-        if os.path.exists('video_result.mp4'): os.remove('video_result.mp4')
+        await status_msg.edit_text(f"❌ خطأ في البحث: {str(e)[:100]}")
+
+# دالة التعامل مع الضغط على الأزرار
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    video_url = query.data
+    
+    await query.edit_message_text("⏳ جاري التحميل... قد يستغرق الأمر دقيقة")
+    await download_video(query, video_url)
+
+# دالة التحميل الفعلية
+async def download_video(update_or_query, url):
+    output = f"vid_{os.urandom(3).hex()}.mp4"
+    ydl_opts = {
+        'format': 'best[ext=mp4]/best',
+        'outtmpl': output,
+        'quiet': True,
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+        
+        # إرسال الملف (سواء كان تحديثًا لرسالة أو رسالة جديدة)
+        chat_id = update_or_query.message.chat_id
+        await update_or_query.get_bot().send_video(chat_id=chat_id, video=open(output, 'rb'), caption="✅ تم التحميل بنجاح")
+        os.remove(output)
+    except Exception as e:
+        await update_or_query.get_bot().send_message(chat_id=update_or_query.message.chat_id, text=f"❌ فشل التحميل: {str(e)[:100]}")
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("أرسل اسم الأغنية للبحث!")))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    app.add_handler(CallbackQueryHandler(button_callback)) # هذا لمعالجة ضغطات الأزرار
     app.run_polling()
