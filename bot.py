@@ -2,22 +2,18 @@ import os
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-# اقرأ التوكن من متغير البيئة BOT_TOKEN
 TOKEN = os.environ.get("BOT_TOKEN")
 
-if not TOKEN:
-    print("❌ خطأ: لم أجد BOT_TOKEN في متغيرات البيئة")
-    exit(1)
+print(f"1. بدأ تشغيل البوت...")
+print(f"2. التوكن موجود: {TOKEN is not None}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ البوت يعمل بنجاح!")
+    print(f"3. استقبلت أمر /start من شخص")
+    await update.message.reply_text("مرحبا! البوت يعمل.")
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("أرسل /start للبدء")
-
-print("🚀 جاري تشغيل البوت...")
+print(f"4. جاري بناء التطبيق...")
 app = Application.builder().token(TOKEN).build()
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("help", help_command))
-print("✅ البوت يعمل وينتظر الأوامر...")
+print(f"5. بدء الاستماع...")
 app.run_polling()
+print(f"6. انتهى البوت")  # هذا السطر لن يظهر أبداً
