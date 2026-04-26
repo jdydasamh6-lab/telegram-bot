@@ -1,31 +1,75 @@
-import os
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-TOKEN = os.environ.get("BOT_TOKEN")
+TOKEN = "8098760550:AAGWfxTD6joMV9Sy_LYGONDlplkKiEKbPjM"
 
-if not TOKEN:
-    print("Error: BOT_TOKEN not found")
-    exit(1)
+# الصفحة 1
+main_menu = [
+    ["📦 صنع بوت جديد", "📋 قائمة بوتاتك"],
+    ["💰 قسم الأرباح", "🌐 Change Language"],
+    ["➡️ التالي"]
+]
 
+# الصفحة 2
+menu_page2 = [
+    ["🤖 صانع البوتات", "⚙️ إدارة حساب"],
+    ["🎵 اهداء الأغاني", "🎮 لعبة اكس او"],
+    ["⬅️ رجوع", "➡️ التالي"]
+]
+
+# الصفحة 3
+menu_page3 = [
+    ["🖼 حذف الخلفية", "🎤 بوت صوتي"],
+    ["🛍 المتجر", "🔗 استخراج روابط"],
+    ["⬅️ رجوع"]
+]
+
+# /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = ReplyKeyboardMarkup(main_menu, resize_keyboard=True)
     await update.message.reply_text(
-        "🤖 *بوت مدير البوتات*\n\n"
-        "لإنشاء بوت جديد:\n\n"
-        "1️⃣ اذهب إلى @BotFather\n"
-        "2️⃣ أرسل /newbot\n"
-        "3️⃣ اختر اسماً للبوت\n"
-        "4️⃣ بعد إنشائه، أرسل لي التوكن وسأقوم بتفعيل الخدمات عليه.\n\n"
-        "📌 البوتات المتاحة: تحميل، زخرفة، حذف خلفية، وغيرها.",
-        parse_mode="Markdown"
+        "👋 أهلاً بك\nOsama Al-Humaidi\n\nاختر من القائمة:",
+        reply_markup=keyboard
     )
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("أرسل /start لبدء استخدام البوت")
+# التحكم بالأزرار
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
 
-app = Application.builder().token(TOKEN).build()
+    # التنقل
+    if text == "➡️ التالي":
+        keyboard = ReplyKeyboardMarkup(menu_page2, resize_keyboard=True)
+        await update.message.reply_text("📂 الصفحة الثانية", reply_markup=keyboard)
+
+    elif text == "⬅️ رجوع":
+        keyboard = ReplyKeyboardMarkup(main_menu, resize_keyboard=True)
+        await update.message.reply_text("🔙 رجعت للقائمة الرئيسية", reply_markup=keyboard)
+
+    # صفحة 3
+    elif text == "➡️ التالي" and context.user_data.get("page") == 2:
+        keyboard = ReplyKeyboardMarkup(menu_page3, resize_keyboard=True)
+        await update.message.reply_text("📂 الصفحة الثالثة", reply_markup=keyboard)
+
+    # أزرار
+    elif text == "📦 صنع بوت جديد":
+        await update.message.reply_text("🤖 أرسل توكن البوت من BotFather")
+
+    elif text == "📋 قائمة بوتاتك":
+        await update.message.reply_text("📂 لا يوجد بوتات حالياً")
+
+    elif text == "💰 قسم الأرباح":
+        await update.message.reply_text("💸 أرباحك: 0$")
+
+    elif text == "🌐 Change Language":
+        await update.message.reply_text("🌍 اختر اللغة")
+
+    else:
+        await update.message.reply_text("❗ اختر من الأزرار")
+
+# تشغيل البوت
+app = ApplicationBuilder().token(TOKEN).build()
+
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("help", help_command))
+app.add_handler(MessageHandler(filters.TEXT, buttons))
 
-print("✅ البوت يعمل...")
 app.run_polling()
