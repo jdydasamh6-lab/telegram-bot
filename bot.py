@@ -1,109 +1,65 @@
-# bot.py - السوبر بوت المتكامل (نسخة عملية)
+import telebot
+from pymongo import MongoClient
+from threading import Thread
 
-import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+# ربط قاعدة البيانات (تحصل على الرابط من موقع MongoDB Atlas مجاناً)
+MONGO_URL = "your_mongodb_connection_string"
+client = MongoClient(MONGO_URL)
+db = client['bot_manager']
+bots_collection = db['active_bots']
 
-# التوكين الخاص بك (ضعه في متغير بيئة في الإنتاج)
-TOKEN = "توكن_البوت_هنا"
+MAIN_TOKEN = "توكن_بوتك_الرئيسي"
+manager = telebot.TeleBot(MAIN_TOKEN)
 
-# تفعيل التسجيل للأخطاء
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# --- وظيفة تشغيل البوتات الفرعية (قالب التحميل) ---
+def start_bot_instance(token, owner_id, bot_type):
+    try:
+        bot = telebot.TeleBot(token)
+        
+        @bot.message_handler(commands=['start'])
+        def welcome(m):
+            # جلب رسالة الترحيب المخصصة من القاعدة
+            data = bots_collection.find_one({"token": token})
+            msg = data.get('welcome_msg', "أهلاً بك في بوتك!")
+            bot.reply_to(m, msg)
 
-# ========== القائمة الرئيسية ==========
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🖼️ تحليل الصور", callback_data="analyze"),
-         InlineKeyboardButton("🎨 زخرفة النصوص", callback_data="decorate")],
-        [InlineKeyboardButton("🗑️ حذف خلفية الصورة", callback_data="remove_bg"),
-         InlineKeyboardButton("🎵 التعرف على الأغاني", callback_data="song_id")],
-        [InlineKeyboardButton("📄 معالجة PDF", callback_data="pdf"),
-         InlineKeyboardButton("🎮 لعب حجر ورقة مقص", callback_data="rps")],
-        [InlineKeyboardButton("👤 من زار ملفي", callback_data="profile_views")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("مرحباً بك في السوبر بوت! اختر إحدى الميزات:", reply_markup=reply_markup)
+        # هنا تضع كود التحميل أو الوظيفة المطلوبة
+        print(f"✅ Bot {token[:10]} is running...")
+        bot.infinity_polling()
+    except:
+        print(f"❌ Failed to start {token[:10]}")
 
-# ========== الميزة 1: زخرفة النصوص ==========
-async def decorate_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text("أرسل النص الذي تريد زخرفته:")
+# --- إعادة تشغيل كل البوتات عند تشغيل المدير (Auto-Restart) ---
+def restart_all_bots():
+    all_bots = bots_collection.find({})
+    for b in all_bots:
+        Thread(target=start_bot_instance, args=(b['token'], b['owner_id'], b['type'])).start()
 
-async def handle_decorate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    decorated = f"""
-✨ **زخرفة النص** ✨
+# --- أوامر المدير الرئيسي ---
+@manager.message_handler(commands=['start'])
+def start(m):
+    manager.send_message(m.chat.id, "مرحباً بك في مدير البوتات! أرسل توكن بوتك الآن.")
 
-𝟏- 𝕭𝖔𝖑𝖉: `{text}`
-𝟐- 𝕊𝕔𝕣𝕚𝕡𝕥: `{text}`
-𝟑- 𝒮𝒸𝓇𝒾𝓅𝓉: `{text}`
-𝟒- 🅂🄼🄰🄻🄻: `{text.upper()}`
-"""
-    await update.message.reply_text(decorated)
-
-# ========== الميزة 2: حذف الخلفية (محاكاة - يتطلب API) ==========
-async def remove_background(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text("أرسل لي الصورة وسأحذف خلفيتها لك.\n(ملاحظة: ستحتاج تفعيل API من remove.bg)")
-
-async def handle_bg_removal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo = await update.message.photo[-1].get_file()
-    await update.message.reply_text("جاري معالجة الصورة... (هنا سيتصل البوت بخدمة إزالة الخلفية)")
-
-# ========== الميزة 3: التعرف على الأغاني ==========
-async def identify_song(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text("أرسل مقطعاً صوتياً أو فيديو قصيراً للأغنية، وسأتعرف عليها.")
-
-async def handle_song_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("جاري التعرف على الأغنية... (يتطلب خدمة AudD API)")
-
-# ========== الميزة 4: حجر ورقة مقص ==========
-async def play_rps(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    keyboard = [
-        [InlineKeyboardButton("🗻 حجر", callback_data="rps_rock"),
-         InlineKeyboardButton("📄 ورقة", callback_data="rps_paper"),
-         InlineKeyboardButton("✂️ مقص", callback_data="rps_scissors")]
-    ]
-    await update.callback_query.edit_message_text("اختر:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def rps_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_choice = query.data.split("_")[1]
-    import random
-    bot_choice = random.choice(["rock", "paper", "scissors"])
-    result = "تعادل!" if user_choice == bot_choice else "فزت!" if (user_choice == "rock" and bot_choice == "scissors") or (user_choice == "paper" and bot_choice == "rock") or (user_choice == "scissors" and bot_choice == "paper") else "خسرت!"
-    await query.edit_message_text(f"أنت: {user_choice}\nالبوت: {bot_choice}\n\n{result}")
-
-# ========== الميزة 5: من زار ملفي الشخصي ==========
-async def profile_views(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text("🔐 هذه الميزة تحتاج إلى إضافة البوت إلى قناة أو مجموعة وتفعيل خاصية تسجيل الزوار.")
-
-# ========== المعالج الرئيسي ==========
-def main():
-    app = Application.builder().token(TOKEN).build()
-
-    # الأوامر
-    app.add_handler(CommandHandler("start", start))
+@manager.message_handler(func=lambda m: ":" in m.text)
+def save_and_start(m):
+    token = m.text.strip()
+    user_id = m.chat.id
     
-    # معالجة الأزرار
-    app.add_handler(CallbackQueryHandler(play_rps, pattern="^rps$"))
-    app.add_handler(CallbackQueryHandler(rps_callback, pattern="^rps_"))
-    app.add_handler(CallbackQueryHandler(identify_song, pattern="^song_id$"))
-    app.add_handler(CallbackQueryHandler(remove_background, pattern="^remove_bg$"))
-    app.add_handler(CallbackQueryHandler(decorate_text, pattern="^decorate$"))
-    app.add_handler(CallbackQueryHandler(profile_views, pattern="^profile_views$"))
-    
-    # معالجة الرسائل
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_decorate))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_bg_removal))
-    app.add_handler(MessageHandler(filters.AUDIO | filters.VOICE, handle_song_id))
-    
-    print("البوت يعمل...")
-    app.run_polling()
+    # حفظ البوت في قاعدة البيانات
+    if not bots_collection.find_one({"token": token}):
+        bots_collection.insert_one({
+            "token": token,
+            "owner_id": user_id,
+            "type": "downloader", # القالب الافتراضي
+            "welcome_msg": "أهلاً بك في بوت التحميل الخاص بك!"
+        })
+        
+        # تشغيله فوراً
+        Thread(target=start_bot_instance, args=(token, user_id, "downloader")).start()
+        manager.reply_to(m, "✅ تم حفظ بوتك وتشغيله! سيبقى يعمل حتى لو توقف السيرفر.")
+    else:
+        manager.reply_to(m, "هذا البوت مسجل بالفعل.")
 
-if __name__ == "__main__":
-    main()
+# تشغيل البوتات القديمة عند بدء السيرفر
+restart_all_bots()
+manager.polling()
