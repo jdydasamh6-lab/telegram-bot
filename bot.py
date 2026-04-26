@@ -1,7 +1,7 @@
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-TOKEN = "حط توكن بوتك الأساسي هنا"
+TOKEN = "8098760550:AAGWfxTD6joMV9Sy_LYGONDlplkKiEKbPjM"
 
 # تخزين مؤقت (بدل قاعدة بيانات)
 user_tokens = {}
