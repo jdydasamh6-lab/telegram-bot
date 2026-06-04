@@ -2,7 +2,7 @@ import os
 import telebot
 from yt_dlp import YoutubeDL
 
-# التوكن الخاص بك مدمج وجاهز للعمل 🚀
+# تم وضع التوكن الجديد والمحدث هنا 🚀
 BOT_TOKEN = "8098760550:AAFqhB3WWBkqeXSD4mJEiUHr4GT04Hm9Ze0"
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -27,8 +27,7 @@ def download_and_send_video(message):
         'format': 'best',
         'outtmpl': 'video.%(ext)s',
         'quiet': True,
-        'no_warnings': True,
-        'cookiefile': None  # في حال تطلب الأمر كوكيز للحسابات الخاصة مستقبلاً
+        'no_warnings': True
     }
 
     try:
@@ -50,7 +49,6 @@ def download_and_send_video(message):
             bot.delete_message(chat_id=message.chat.id, message_id=msg.message_id)
 
     except Exception as e:
-        # إدارة الأخطاء وإبلاغ المستخدم بشكل مبسط
         error_message = str(e)
         if "Private" in error_message or "login" in error_message:
             clean_error = "عذراً، هذا الفيديو موجود في حساب خاص (Private) ولا يمكن للبوت الوصول إليه."
@@ -60,5 +58,5 @@ def download_and_send_video(message):
         bot.edit_message_text(f"❌ {clean_error}", chat_id=message.chat.id, message_id=msg.message_id)
 
 # بدء تشغيل البوت ومراقبته باستمرار
-print("✅ البوت يعمل الآن بنجاح ومستعد لاستقبال الروابط...")
+print("✅ البوت يعمل الآن بنجاح بالتوكن الجديد ومستعد لاستقبال الروابط...")
 bot.infinity_polling()
