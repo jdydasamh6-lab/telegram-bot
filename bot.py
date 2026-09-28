@@ -12,7 +12,8 @@ from flask import Flask, jsonify
 
 
 # ✅ تم إضافة توكن التليجرام الخاص بك مباشرة هنا
-TELEGRAM_BOT_TOKEN = "8673917984:AAF2tL3yy9s2p5mtilm1HHnWuDPEcsXlD-U"
+TELEGRAM_BOT_TOKEN = "8673917984:AAEXkU-U9_gsaZEmW8Y2xZNa2yAQ87QAJR8
+"
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "8951669077").strip()
 
 MAX_ACTIVE_TRADES = 1
