@@ -1,2 +1,2 @@
-pyTelegramBotAPI
-yt-dlp
+requests>=2.31.0,<3
+Flask>=3.0,<4
