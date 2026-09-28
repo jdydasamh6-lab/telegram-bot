@@ -18,7 +18,8 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "8951669077").strip()
 MAX_ACTIVE_TRADES = 1
 STATE_FILE = Path(os.getenv("STATE_FILE", "my_final_scalping_bot.json"))
 
-BINANCE_API = "https://api.binance.com/api/v3"
+# تم تعديل رابط باينانس إلى نطاق بديل يتجاوز القيود الجغرافية لسيرفرات Render
+BINANCE_API = "https://data-api.binance.vision/api/v3"
 TELEGRAM_API = "https://api.telegram.org"
 
 REQUEST_TIMEOUT = 10
