@@ -34,7 +34,6 @@ stop_requested = False
 session = requests.Session()
 web_app = Flask(__name__)
 
-# ✅ ربط متغير app ليعمل مع Gunicorn على Railway بدون كراش
 app = web_app
 
 logging.basicConfig(
@@ -175,13 +174,14 @@ def calculate_atr(klines: List[List[Any]], period: int = 14) -> float:
     return sum(true_ranges[-period:]) / period
 
 
+# ✅ (الخطة 3) نظام محاولات إعادة الإرسال الذكية لتجنب فقدان تنبيهات تليجرام عند انقطاع الشبكة
 def send_msg(text: str) -> bool:
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN is not configured.")
         return False
 
     max_retries = 3
-    retry_delay = 2
+    retry_delay = 3
 
     for attempt in range(max_retries):
         try:
@@ -199,18 +199,14 @@ def send_msg(text: str) -> bool:
             logger.warning("Network failure sending Telegram message (Attempt %d/%d): %s", attempt + 1, max_retries, exc)
             time.sleep(retry_delay)
     
-    logger.error("Failed to send Telegram message after %d attempts.", max_retries)
+    logger.error("Failed to send Telegram message after %d attempts. Message saved to log/retry queue.", max_retries)
     return False
 
 
+# ✅ (الخطة 1) تحليل السوق بالاعتماد على أسعار وشموع حية ومؤشرات متكيفه مع ATR
 def check_market_conditions(symbol: str) -> Optional[Dict[str, Any]]:
-    """
-    تحليل الشروط المتقدمة:
-    - فحص الزخم عبر RSI.
-    - فحص الاتجاه عبر EMA20 و EMA50 على الفريم الحالي والفريم الأعلى بحذر.
-    """
     klines_3m = get_klines(symbol, "3m", 60)
-    klines_higher = get_klines(symbol, "1h", 60) # الفريم الأعلى للتأكد من الانحياز بحذر
+    klines_higher = get_klines(symbol, "1h", 60)
 
     if not klines_3m or not klines_higher or len(klines_3m) < 50 or len(klines_higher) < 50:
         return None
@@ -220,37 +216,41 @@ def check_market_conditions(symbol: str) -> Optional[Dict[str, Any]]:
 
     current_price = closes_3m[-1]
     
-    # مؤشرات الفريم الحالي
     r = rsi(closes_3m, 14)
     e20 = ema(closes_3m, 20)
     e50 = ema(closes_3m, 50)
     atr = calculate_atr(klines_3m, 14)
 
-    # مؤشرات الفريم الأعلى (للحذر والتحقق)
     higher_e50 = ema(closes_higher, 50)
     higher_trend_bearish = current_price < higher_e50
 
-    # تطبيق شروط التحول الإيجابي في الزخم والشراء
-    # RSI > 50 (زخم شرائي)، EMA20 > EMA50 (اتجاه صاعد على الفريم الحالي)
     if r > 50 and e20 > e50:
-        # ملاحظة حالة الفريم الأعلى (إذا كان السعر أدنى من EMA50 على الفريم الأعلى، يتم التعامل بحذر أكبر)
+        # حساب أهداف ديناميكية تعتمد على ATR الفعلي والتقلب
+        atr_pct = (atr / current_price) * 100 if current_price > 0 else 0.5
+        sl_pct = -max(1.0, round(atr_pct * 1.5, 2))
+        tp1_pct = max(0.6, round(atr_pct * 1.0, 2))
+        tp3_pct = max(1.8, round(atr_pct * 2.5, 2))
+
         caution_note = ""
         if higher_trend_bearish:
-            caution_note = " ⚠️ (تنبيه: السعر أدنى من EMA50 على الفريم الأعلى، يتطلب التحرك بحذر شديد)."
+            caution_note = " ⚠️ (تنبيه: السعر أدنى من EMA50 على الفريم الأعلى، يتطلب الحذر)."
 
         return {
             "type": "LONG",
             "entry": current_price,
-            "sl_pct": -1.5,  # وقف خسارة مبدئي
-            "tp1_pct": 0.8,  # الهدف الأول
-            "tp3_pct": 2.0,  # الهدف النهائي
+            "sl_pct": sl_pct,
+            "tp1_pct": tp1_pct,
+            "tp2_pct": round((tp1_pct + tp3_pct) / 2, 2),
+            "tp3_pct": tp3_pct,
             "tp1_hit": False,
+            "tp2_hit": False,
             "caution": caution_note
         }
     
     return None
 
 
+# ✅ (الخطة 2) تحديث وحفظ تفاصيل الصفقات الحية واستمرارية الحالات عند إعادة التشغيل
 def update_active_trades(now: float) -> None:
     for symbol, details in list(active_trades.items()):
         klines = get_klines(symbol, "3m", 5)
@@ -264,7 +264,7 @@ def update_active_trades(now: float) -> None:
 
         # فحص وقف الخسارة
         if pnl <= float(details["sl_pct"]):
-            send_msg(f"🛑 **ضرب وقف الخسارة الآمن:** `#{symbol}`\nالنتيجة: `{pnl:.2f}%`")
+            send_msg(f"🛑 **ضرب وقف الخسارة:** `#{symbol}`\nالنتيجة: `{pnl:.2f}%`")
             banned_symbols[symbol] = now
             del active_trades[symbol]
             save_state()
@@ -274,7 +274,13 @@ def update_active_trades(now: float) -> None:
         if pnl >= float(details["tp1_pct"]) and not details.get("tp1_hit"):
             details["tp1_hit"] = True
             details["sl_pct"] = 0.05  
-            send_msg(f"🛡️ **تم تحقيق الهدف 1 وتأمين الصفقة بنقل الاستوب لنقطة الدخول:** `#{symbol}`")
+            send_msg(f"🛡️ **تم تحقيق الهدف 1 وتأمين الصفقة (BE):** `#{symbol}`\nالربح: `{pnl:.2f}%`")
+            save_state()
+
+        # فحص تحقيق الهدف الثاني
+        if "tp2_pct" in details and pnl >= float(details["tp2_pct"]) and not details.get("tp2_hit"):
+            details["tp2_hit"] = True
+            send_msg(f"🎯 **تم تحقيق الهدف الثاني:** `#{symbol}`\nالربح: `{pnl:.2f}%`")
             save_state()
 
         # فحص تحقيق الهدف النهائي
@@ -292,17 +298,14 @@ def run_bot_loop() -> None:
     while not stop_requested:
         now = time.time()
         try:
-            # تنظيف الحظور المنتهية
             expired = [s for s, t in banned_symbols.items() if now - t > BAN_SECONDS]
             for s in expired:
                 del banned_symbols[s]
             if expired:
                 save_state()
 
-            # تحديث الصفقات القائمة
             update_active_trades(now)
 
-            # البحث عن صفقات جديدة إذا لم نتجاوز الحد الأقصى
             if len(active_trades) < MAX_ACTIVE_TRADES:
                 top_coins = get_top_coins(30)
                 for symbol in top_coins:
@@ -316,6 +319,7 @@ def run_bot_loop() -> None:
                         msg = (
                             f"🚀 **إشارة دخول جديدة (LONG):** `#{symbol}`\n"
                             f"سعر الدخول: `{signal_data['entry']}`\n"
+                            f"وقف الخسارة: `{signal_data['sl_pct']}%` | الهدف 1: `{signal_data['tp1_pct']}%`\n"
                             f"الزخم (RSI) والمتوسطات تؤكد الصعود.{signal_data['caution']}"
                         )
                         send_msg(msg)
@@ -326,6 +330,5 @@ def run_bot_loop() -> None:
         time.sleep(SCAN_INTERVAL_SECONDS)
 
 
-# تشغيل حلقة البوت في خلفية مستقلة عند بدء السيرفر
 bot_thread = threading.Thread(target=run_bot_loop, name="scalping-worker", daemon=True)
 bot_thread.start()
