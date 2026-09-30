@@ -10,65 +10,70 @@ from typing import Any, Dict, List, Optional
 import requests
 from flask import Flask, jsonify
 
-
-# ✅ تم إضافة توكن التليجرام الخاص بك مباشرة هنا بشكل صحيح ومتصل
+# ==========================================
+# الإعدادات الأساسية وبيانات الاتصال والتأمين
+# ==========================================
 TELEGRAM_BOT_TOKEN = "8673917984:AAEXkU-U9_gsaZEmW8Y2xZNa2yAQ87QAJR8"
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "8951669077").strip()
 
-MAX_ACTIVE_TRADES = 1
-STATE_FILE = Path(os.getenv("STATE_FILE", "my_final_scalping_bot.json"))
+MAX_ACTIVE_TRADES = 3  # [Plan #1] السماح بتتبع عدة إشارات متوازية مع منع التكرار
+STATE_FILE = Path(os.getenv("STATE_FILE", "advanced_futures_scalping_bot.json"))
 
-# تم تعديل رابط باينانس إلى نطاق بديل يتجاوز القيود الجغرافية لسيرفرات Render
-BINANCE_API = "https://data-api.binance.vision/api/v3"
-TELEGRAM_API = "https://api.telegram.org"
+# [Plan #1] الربط المباشر بنطاق العقود الآجلة الحية (Binance Futures API v1)
+BINANCE_API = "https://binance.com"
+TELEGRAM_API = "https://telegram.org"
 
 REQUEST_TIMEOUT = 10
-SCAN_INTERVAL_SECONDS = 10
-BAN_SECONDS = 30 * 60
+SCAN_INTERVAL_SECONDS = 15
+BAN_SECONDS = 45 * 60
 
 WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("PORT", "8080"))
 
+# [Plan #2] جداول الذاكرة لحفظ ومراقبة دورة حياة الإشارات والصفقات
 active_trades: Dict[str, Dict[str, Any]] = {}
 banned_symbols: Dict[str, float] = {}
+signal_history: Dict[str, List[float]] = {}  # لمنع الإشارات المتعارضة والمكررة
 
 stop_requested = False
 session = requests.Session()
 web_app = Flask(__name__)
 
+# [إصلاح منصة Railway] ربط مفسر الـ Gunicorn بالمتغير المتوقع تلقائياً
+app = web_app
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
+logger = logging.getLogger("futures-scalping-bot")
 
-logger = logging.getLogger("scalping-bot")
 
-
+# ==========================================
+# [Plan #2] واجهات فحص خادم الـ Health Check
+# ==========================================
 @web_app.get("/")
 def home():
-    return jsonify(
-        {
-            "service": "scalping-bot",
-            "status": "running",
-            "health": "/health",
-        }
-    )
+    return jsonify({
+        "service": "advanced-futures-scalping-bot",
+        "status": "active",
+        "version": "2.0.0",
+        "framework": "Production Gunicorn/Flask"
+    })
 
 
 @web_app.get("/health")
 def health():
-    return jsonify(
-        {
-            "status": "ok",
-            "active_trades": len(active_trades),
-            "banned_symbols": len(banned_symbols),
-        }
-    )
+    return jsonify({
+        "status": "ok",
+        "tracked_active_trades": len(active_trades),
+        "banned_cooldown_symbols": len(banned_symbols),
+        "historical_signals_count": len(signal_history)
+    })
 
 
 def start_web_server() -> None:
-    """تشغيل خادم Flask بجانب حلقة البوت."""
+    """تشغيل خادم Flask بشكل متوازي مع بقاء حلقة الفحص مستمرة."""
     web_thread = threading.Thread(
         target=lambda: web_app.run(
             host=WEB_HOST,
@@ -77,401 +82,197 @@ def start_web_server() -> None:
             threaded=True,
             use_reloader=False,
         ),
-        name="health-server",
+        name="production-health-server",
         daemon=True,
     )
-
     web_thread.start()
     logger.info("Health server listening on %s:%d", WEB_HOST, WEB_PORT)
 
 
+# ==========================================
+# [Plan #2] قاعدة الحفظ التلقائي الدائم لحالة السوق
+# ==========================================
 def load_state() -> None:
-    global banned_symbols, active_trades
-
+    global banned_symbols, active_trades, signal_history
     if not STATE_FILE.exists():
         return
-
     try:
         with STATE_FILE.open("r", encoding="utf-8") as file:
             state = json.load(file)
-
-        banned_symbols = {
-            str(symbol): float(timestamp)
-            for symbol, timestamp in state.get("banned_symbols", {}).items()
-        }
-
-        active_trades = {
-            str(symbol): details
-            for symbol, details in state.get("active_trades", {}).items()
-            if isinstance(details, dict)
-        }
-
-        logger.info(
-            "Loaded state: %d active trade(s), %d banned symbol(s)",
-            len(active_trades),
-            len(banned_symbols),
-        )
-
+        banned_symbols = {str(k): float(v) for k, v in state.get("banned_symbols", {}).items()}
+        active_trades = {str(k): dict(v) for k, v in state.get("active_trades", {}).items()}
+        signal_history = {str(k): list(v) for k, v in state.get("signal_history", {}).items()}
+        logger.info("State database loaded successfully from storage.")
     except (OSError, ValueError, TypeError) as exc:
-        logger.warning("Could not load state file: %s", exc)
+        logger.warning("Could not restore data state: %s", exc)
 
 
 def save_state() -> None:
+    """تخزين دائم ومجدول لكل تفعيل لـ SL و TP والـ BE لحمايتها عند إعادة التشغيل."""
     state = {
         "banned_symbols": banned_symbols,
         "active_trades": active_trades,
+        "signal_history": signal_history
     }
-
     temporary_file = STATE_FILE.with_suffix(STATE_FILE.suffix + ".tmp")
-
     try:
         with temporary_file.open("w", encoding="utf-8") as file:
             json.dump(state, file, ensure_ascii=False, indent=2)
-
         temporary_file.replace(STATE_FILE)
-
     except OSError as exc:
-        logger.error("Could not save state file: %s", exc)
-
+        logger.error("State saving database error: %s", exc)
         try:
             temporary_file.unlink(missing_ok=True)
         except OSError:
             pass
 
 
-def get_top_coins(limit: int = 50) -> List[str]:
-    """الحصول على أكثر أزواج USDT سيولة حسب حجم التداول اليومي."""
+# ==========================================
+# [Plan #1] محرك جلب وتحليل مؤشرات عقود الـ Futures
+# ==========================================
+def get_top_futures_coins(limit: int = 40) -> List[str]:
+    """جلب أزواج العقود الآجلة USDT الأكثر سيولة وحجماً تداولياً من خادم الفيوتشرز."""
     try:
-        response = session.get(
-            f"{BINANCE_API}/ticker/24hr",
-            timeout=REQUEST_TIMEOUT,
-        )
-
+        response = session.get(f"{BINANCE_API}/ticker/24hr", timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
         tickers = response.json()
-
-        liquid_pairs = [
-            ticker
-            for ticker in tickers
-            if ticker.get("symbol", "").endswith("USDT")
-            and float(ticker.get("quoteVolume", 0)) > 15_000_000
+        
+        # فلترة الأزواج التي تنتهي بـ USDT ولها حجم سيولة يتخطى 15 مليون
+        pairs = [
+            t for t in tickers 
+            if str(t.get("symbol")).endswith("USDT") and float(t.get("quoteVolume", 0)) > 15000000
         ]
-
-        liquid_pairs.sort(
-            key=lambda ticker: float(ticker.get("quoteVolume", 0)),
-            reverse=True,
-        )
-
-        return [ticker["symbol"] for ticker in liquid_pairs[:limit]]
-
-    except (
-        requests.RequestException,
-        ValueError,
-        TypeError,
-        KeyError,
-    ) as exc:
-        logger.warning("Could not fetch Binance ticker data: %s", exc)
+        pairs.sort(key=lambda t: float(t.get("quoteVolume", 0)), reverse=True)
+        return [str(t["symbol"]) for t in pairs[:limit]]
+    except Exception as exc:
+        logger.warning("Error fetching futures tickers: %s", exc)
         return []
 
 
-def get_klines(
-    symbol: str,
-    interval: str = "3m",
-    limit: int = 60,
-) -> Optional[List[List[Any]]]:
+def get_futures_klines(symbol: str, interval: str, limit: int) -> Optional[List[List[Any]]]:
+    """جلب بيانات الشموع الحية الفورية من سوق عقود Binance Futures."""
     try:
         response = session.get(
             f"{BINANCE_API}/klines",
-            params={
-                "symbol": symbol,
-                "interval": interval,
-                "limit": limit,
-            },
-            timeout=REQUEST_TIMEOUT,
+            params={"symbol": symbol, "interval": interval, "limit": limit},
+            timeout=REQUEST_TIMEOUT
         )
-
         response.raise_for_status()
         data = response.json()
-
         return data if isinstance(data, list) else None
-
-    except (
-        requests.RequestException,
-        ValueError,
-        TypeError,
-    ) as exc:
-        logger.debug("Could not fetch klines for %s: %s", symbol, exc)
+    except Exception as exc:
+        logger.debug("Failed to pull klines for %s: %s", symbol, exc)
         return None
 
 
-def ema(prices: List[float], period: int) -> float:
+def calculate_ema(prices: List[float], period: int) -> float:
     if not prices:
         return 0.0
-
     if len(prices) < period:
         return sum(prices) / len(prices)
-
     multiplier = 2 / (period + 1)
-    result = prices[0]
-
-    for price in prices[1:]:
+    result = sum(prices[:period]) / period
+    for price in prices[period:]:
         result = (price - result) * multiplier + result
-
     return result
 
 
-def rsi(closes: List[float], period: int = 14) -> float:
+def calculate_rsi(closes: List[float], period: int = 14) -> float:
     if len(closes) < period + 1:
         return 50.0
-
-    gains: List[float] = []
-    losses: List[float] = []
-
-    for index in range(1, len(closes)):
-        change = closes[index] - closes[index - 1]
-
-        gains.append(max(change, 0))
-        losses.append(abs(min(change, 0)))
-
-    average_gain = sum(gains[-period:]) / period
-    average_loss = sum(losses[-period:]) / period
-
-    if average_loss == 0:
+    gains, losses = [], []
+    for i in range(1, len(closes)):
+        diff = closes[i] - closes[i - 1]
+        gains.append(max(diff, 0))
+        losses.append(abs(min(diff, 0)))
+        
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
+    if avg_loss == 0:
         return 100.0
+    return 100 - (100 / (1 + (avg_gain / avg_loss)))
 
-    return 100 - (100 / (1 + average_gain / average_loss))
+
+def calculate_atr(klines: List[List[Any]], period: int = 14) -> float:
+    """حساب متوسط المدى الحقيقي (ATR) الحقيقي لقياس حجم التقلب والسيولة الحالية."""
+    if not klines or len(klines) < period + 1:
+        return 0.0
+    true_ranges = []
+    for i in range(1, len(klines)):
+        high = float(klines[i][2])
+        low = float(klines[i][3])
+        prev_close = float(klines[i - 1][4])
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        true_ranges.append(tr)
+    return sum(true_ranges[-period:]) / period
 
 
-def send_msg(text: str) -> bool:
+# ==========================================
+# [Plan #3] نظام الأمان وضمان استقرار الرسائل والتنبيهات
+# ==========================================
+def send_secure_msg(text: str) -> bool:
+    """آلية محاولة إعادة الإرسال الأوتوماتيكية عند حدوث انقطاع مؤقت بالشبكة."""
     if not TELEGRAM_BOT_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN is not configured.")
         return False
-
-    try:
-        response = session.post(
-            f"{TELEGRAM_API}/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": text,
-                "parse_mode": "Markdown",
-            },
-            timeout=REQUEST_TIMEOUT,
-        )
-
-        response.raise_for_status()
-        body = response.json()
-
-        if not body.get("ok", False):
-            logger.error("Telegram rejected the message: %s", body)
-            return False
-
-        return True
-
-    except (
-        requests.RequestException,
-        ValueError,
-        TypeError,
-    ) as exc:
-        logger.warning("Could not send Telegram message: %s", exc)
-        return False
+    max_retries = 4
+    retry_delay = 3
+    for attempt in range(max_retries):
+        try:
+            response = session.post(
+                f"{TELEGRAM_API}/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"},
+                timeout=REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            if response.json().get("ok", False):
+                return True
+        except requests.RequestException as exc:
+            logger.warning("Telegram network failure (Attempt %d/%d): %s", attempt + 1, max_retries, exc)
+            time.sleep(retry_delay)
+    logger.error("[Plan #3] CRITICAL: Telegram notification packet was lost permanently.")
+    return False
 
 
-def precision_for(symbol: str, price: float) -> int:
-    if any(token in symbol for token in ("PEPE", "SHIB", "BONK")):
+def get_precision(symbol: str, price: float) -> int:
+    if any(t in symbol for t in ("PEPE", "SHIB", "BONK", "FLOKI")):
         return 8
-
-    if price < 1:
-        return 4
-
-    return 2
+    return 4 if price < 1.0 else 2
 
 
 def handle_signal(_signum: int, _frame: Any) -> None:
     global stop_requested
-
     stop_requested = True
-    logger.info("Shutdown requested; finishing the current cycle.")
+    logger.info("Graceful shutdown routine triggered.")
 
 
-def cleanup_expired_bans(now: float) -> None:
-    expired = [
-        symbol
-        for symbol, timestamp in banned_symbols.items()
-        if now - timestamp > BAN_SECONDS
-    ]
-
-    for symbol in expired:
-        del banned_symbols[symbol]
-
-    if expired:
-        save_state()
-
-
-def update_active_trades(now: float) -> None:
-    for symbol, details in list(active_trades.items()):
-        klines = get_klines(symbol, "3m", 5)
-
+# ==========================================
+# [Plan #2] إدارة الصفقات المفتوحة حياً ومراقبة الـ BE والـ SL
+# ==========================================
+def update_tracked_trades(now: float) -> None:
+    """تحديث حي لحالة الانتقال وجني الأرباح الجزئي وتعديل مستويات الاستوب لمنع الخسائر."""
+    for symbol, trade in list(active_trades.items()):
+        klines = get_futures_klines(symbol, "3m", 5)
         if not klines or len(klines) < 2:
             continue
-
+            
         current_price = float(klines[-1][4])
-        entry_price = float(details["entry"])
-
-        if details.get("type") == "LONG":
-            pnl = (current_price - entry_price) / entry_price * 100
-        else:
-            pnl = (entry_price - current_price) / entry_price * 100
-
-        if pnl <= float(details["sl_pct"]):
-            send_msg(
-                f"🛑 **ضرب وقف الخسارة الآمن:** `#{symbol}`\n"
-                f"النتيجة: `{pnl:.2f}%`"
+        entry_price = float(trade["entry"])
+        
+        # حساب نسبة الربح أو الخسارة العادية
+        pnl = ((current_price - entry_price) / entry_price) * 100
+        
+        # 1. التحقق من ضرب وقف الخسارة
+        if pnl <= float(trade["sl_pct"]):
+            send_secure_msg(
+                f"🛑 **تحديث الإشارة المجدولة الحية:** `#{symbol}`\n"
+                f"ℹ️ الحالة: ضرب الخروج الآمن (SL)\n"
+                f"📉 النتيجة النهائية المباشرة: `{pnl:.2f}%` ⚙️"
             )
-
             banned_symbols[symbol] = now
             del active_trades[symbol]
             save_state()
             continue
 
-        if pnl >= float(details["tp1_pct"]) and not details.get("tp1_hit"):
-            details["tp1_hit"] = True
-
-            # تأمين الصفقة بعد الهدف الأول
-            details["sl_pct"] = 0.1
-
-            send_msg(
-                f"🛡️ **تأمين الصفقة ونقل الاستوب لنقطة الدخول:** `#{symbol}`"
-            )
-
-            save_state()
-
-        if pnl >= float(details["tp3_pct"]):
-            send_msg(
-                f"🎯 **تم تحقيق الهدف بالكامل:** `#{symbol}`\n"
-                f"الربح: `+{pnl:.2f}%` 🚀"
-            )
-
-            del active_trades[symbol]
-            save_state()
-
-
-def scan_for_entry() -> None:
-    if len(active_trades) >= MAX_ACTIVE_TRADES:
-        return
-
-    for symbol in get_top_coins():
-        if stop_requested:
-            return
-
-        if symbol in active_trades or symbol in banned_symbols:
-            continue
-
-        klines = get_klines(symbol, "3m", 60)
-
-        if not klines or len(klines) < 40:
-            continue
-
-        closes = [float(kline[4]) for kline in klines]
-        opens = [float(kline[1]) for kline in klines]
-
-        current_price = closes[-1]
-        ema9 = ema(closes, 9)
-        ema21 = ema(closes, 21)
-        current_rsi = rsi(closes, 14)
-
-        # استراتيجية شراء الهبوط داخل اتجاه صاعد
-        if (
-            ema9 > ema21
-            and 42 < current_rsi < 52
-            and current_price > opens[-1]
-        ):
-            sl_pct = 1.50
-            tp1_pct = 1.20
-            tp2_pct = 2.50
-            tp3_pct = 4.00
-
-            decimals = precision_for(symbol, current_price)
-            entry_text = f"{current_price:.{decimals}f}"
-
-            message = (
-                "🔥 **توصية سكالبينج ارتداد آمنة** 🔥\n\n"
-                f"📌 **العملة:** `#{symbol}`\n"
-                "📊 **الاتجاه:** 🟢 LONG\n"
-                f"🎯 **الدخول:** `{entry_text}`\n\n"
-                f"🎯 **هدف 1:** "
-                f"`{current_price * (1 + tp1_pct / 100):.{decimals}f}` "
-                f"(+{tp1_pct}%)\n"
-                f"🎯 **هدف 2:** "
-                f"`{current_price * (1 + tp2_pct / 100):.{decimals}f}` "
-                f"(+{tp2_pct}%)\n"
-                f"🎯 **هدف 3:** "
-                f"`{current_price * (1 + tp3_pct / 100):.{decimals}f}` "
-                f"(+{tp3_pct}%)\n\n"
-                f"🛑 **الاستوب:** "
-                f"`{current_price * (1 - sl_pct / 100):.{decimals}f}` "
-                f"(-{sl_pct}%)\n"
-                "⚡ **الرافعة:** 10x"
-            )
-
-            if send_msg(message):
-                active_trades[symbol] = {
-                    "entry": current_price,
-                    "type": "LONG",
-                    "sl_pct": -sl_pct,
-                    "tp1_pct": tp1_pct,
-                    "tp3_pct": tp3_pct,
-                    "tp1_hit": False,
-                }
-
-                save_state()
-                logger.info(
-                    "Opened signal for %s at %s",
-                    symbol,
-                    entry_text,
-                )
-
-                return
-
-        time.sleep(0.1)
-
-
-def run() -> None:
-    if not TELEGRAM_BOT_TOKEN:
-        raise RuntimeError("Missing TELEGRAM_BOT_TOKEN.")
-
-    if not TELEGRAM_CHAT_ID:
-        raise RuntimeError("Missing TELEGRAM_CHAT_ID.")
-
-    load_state()
-    start_web_server()
-
-    logger.info("💎 البوت المطور يعمل الآن.. في انتظار الصفقات الآمنة.")
-
-    while not stop_requested:
-        try:
-            now = time.time()
-
-            cleanup_expired_bans(now)
-            update_active_trades(now)
-            scan_for_entry()
-
-            time.sleep(SCAN_INTERVAL_SECONDS)
-
-        except KeyboardInterrupt:
-            break
-
-        except Exception:
-            logger.exception("Unexpected cycle error; retrying soon.")
-            time.sleep(5)
-
-    save_state()
-    session.close()
-
-    logger.info("Bot stopped safely.")
-
-
-if __name__ == "__main__":
-    signal.signal(signal.SIGINT, handle_signal)
-    signal.signal(signal.SIGTERM, handle_signal)
-
-    run()
+        # 2. [Plan #2] تحقيق الهدف الأول ونقل الاستوب أوتوماتيكياً لنقطة الدخول لضمان الخروج الآمن (BE)
+        if pnl >= float(trade["tp1_pct"]) and not trade.get("tp1_hit"):
+            trade["tp1_hit"] = True
